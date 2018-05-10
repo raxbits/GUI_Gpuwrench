@@ -1,0 +1,225 @@
+#!/bin/bash 
+
+#==============================================================================      
+
+#title           : GPUWrench
+#description     : Program to OverClock, Set Fan Speed and Get GPU Information
+#date            : 27 April 2018
+#authors		 : Ramin Ranjbar - raxbits@gmail.com
+#version         : 1.0   
+#usage		 : bash gpuwrench -h
+
+
+#THIS CODE comes as is. This is a sole personal project, not connected to an employer.
+
+#==============================================================================
+
+function pf
+{
+	echo -e '****************'
+}
+
+function unlock_pwm
+{
+	pf
+	echo -e 'Unlocking Power Management Layer'
+	echo "1" | sudo tee /sys/class/drm/card0/device/hwmon/hwmon0/pwm1_enable
+	echo -e 'Done'
+	pf
+
+}
+
+function set_fan
+{
+	echo "$1" | sudo tee /sys/class/drm/card0/device/hwmon/hwmon0/pwm1
+}
+
+function core_oc
+{
+	echo "$1" | sudo tee /sys/class/drm/card0/device/pp_sclk_od
+}
+
+function mem_oc
+{
+	echo "$1" | sudo tee /sys/class/drm/card0/device/pp_mclk_od
+}
+
+function get_info
+{
+	echo -e '\n*************************** GPU Information Dump ***************************\n'
+	sudo cat /sys/kernel/debug/dri/0/amdgpu_pm_info
+	echo -e '\n*************************** End ********************************************\n'
+}
+
+#TODO: Make this programming aesthetically pleasing
+
+function general_info
+{
+	echo -e '\n*************************** Kernel Information Dump ***************************\n'
+	echo -e 'Kernel version:'$(uname -r) '\n'
+	echo -e 'OS version:' $(lsb_release -r) '\n'
+	echo -e 'OS ' $(lsb_release -c) '\n'
+	echo -e 'GPU Connected:' $(lspci -nnk | grep 'VGA') '\n'
+	echo -e 'Loaded VGA driver:' `lspci -nnk|grep 'Kernel driver in use: amdgpu'|grep -oE '[^ ]+$'` '\n'
+	#check loaded substring 
+	if [ "`dmesg |grep -i 'dce' | wc -l`" != "0" ] || [ "`xrandr --prop |grep -i 'freeasync' | wc -l`" != "0" ];then
+	echo -e 'DAL is Enabled'
+	else
+	echo -e 'DAL is Disabled' '\n'
+	fi
+	echo -e '\n*************************** End ************************************************\n'
+}
+
+
+function export_html
+{
+
+	if [ "$1" == '' ] || [ "$1" == ' ' ]; then
+		fname='Full'
+		ext='_Report.html'
+		comb=$fname$ext
+		
+		sudo lshw -html > $comb
+
+	else
+		fname=$1
+		ext='_Report.html'
+		comb=$fname$ext
+		if [ -e $comb ]; then
+		echo -e 'Similar filename exists! Are you sure you want to override the old file? (y/n)'
+		read -p 'Answer : ' resp
+		fi
+
+		if [ "$resp" == 'y' ] && [ -e $comb ];then
+		sudo lshw -html > $comb
+		fi
+		sudo lshw -C $1 -html  > $comb
+	fi
+	xdg-open $comb
+}
+
+function logger
+{
+	echo -e 'add me ^__^'
+}
+
+function setup_umr
+{
+	pushd $PWD && cd /tmp
+	if [ -d 'umr' ];then
+		rm -rf umr
+	fi
+
+	git clone git://anongit.freedesktop.org/amd/umr && cd umr
+	sudo apt install cmake llvm libpciaccess-dev libncurses5-dev libdrm2-amdgpu
+	mkdir -p build && cd build
+	cmake ..
+	if [ "$?" == "0" ];then
+		make -j$(nproc) && sudo make install 
+	else
+		echo -e 'CMAKE failed to generate MakeFile for UMR tool'
+	fi
+	rm -rf umr
+
+	popd 
+	sudo chmod +s `which umr`
+}
+
+function netdata_setup
+{
+	stat=$(bash <(curl -Ss https://my-netdata.io/kickstart.sh) all) 
+		sudo service netdata restart
+		xdg-open http://localhost:19999 &
+}
+
+usage="
+$(basename "$0") ======> Program to OverClock, Set Fan Speed and Get GPU Information
+
+OPTIONS:
+
+    -h  show this help text
+    -info  display GPU information 
+    -mem n  overclock memory by n percent
+    -core n overclock GPU by n percent
+    -fan n set fan pwm level to n (Input Range: 0-255)
+    -report creates browsable system report 
+    -os provides relevant OS information
+    -n setup netdata for monitoring the system 
+    -umr setup UserModeRegisterRead tool from https://cgit.freedesktop.org/amd/umr 
+    -gmode provides all information for the GPU in realtime, using UMR tool. Needs UMR to be installed first!
+
+"
+runtime_prompt="
+
+Options Available:
+
+    -h  show this help text
+    -info  display GPU information 
+    -mem n  overclock memory by n percent
+    -core n overclock GPU by n percent
+    -fan n set fan pwm level to n (Input Range: 0-255)
+    -report creates browsable system report 
+    -os provides relevant OS information
+    -n setup netdata for monitoring the system 
+    -umr setup UserModeRegisterRead tool from https://cgit.freedesktop.org/amd/umr 
+    -gmode provides all information for the GPU in realtime, using UMR tool. Needs UMR to be installed first!
+"
+while getopts ':helpmemnetcorefaninforeportosumrgmode:' option; do
+  case "$option" in
+    h | help) echo "$usage"
+       	exit
+       ;;
+    m | mem) mem_oc $2
+		exit
+       ;;
+    n | net) netdata_setup
+		exit
+		;;
+    c | core) core_oc $2
+		exit
+       ;;
+    f | fan) set_fan $2
+		exit
+       ;;
+    i | info) get_info
+		exit
+       ;;
+    r | report)
+		export_html $2
+		exit
+	   ;;
+	o | os)
+		general_info
+		exit
+	   ;;
+	u | umr)
+		setup_umr
+		if [ "$?" == "0" ];then
+			pf
+			echo -e 'UMR is installed and Ready to be used'
+			echo -e 'To Run UMR, run "sudo umr" in your terminal/shell'
+			echo -e 'For your convinence, a file called "umr_options.txt" is created. '
+			echo -e 'You can read the file for all available options'
+			pf
+			sudo umr --help > umr_options.txt
+
+		fi
+		exit
+		;;
+	g | gmode)
+		sudo umr --top 
+		exit
+		;;
+
+    :) printf "missing argument for -%s\n" "$OPTARG" >&2
+       echo "$usage" >&2
+       	exit 1
+       ;;
+   \?) printf "Incorrect option ----> -%s" "$OPTARG" >&2
+       echo "$runtime_prompt" >&2
+       	exit 1
+       ;;
+
+  esac
+done
+shift $((OPTIND - 1))
